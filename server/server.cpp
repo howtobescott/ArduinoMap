@@ -1,0 +1,186 @@
+//eClass a2part1 solution used as template*
+
+#include <iostream>
+#include <cassert>
+#include <stack>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <list>
+#include "wdigraph.h"
+#include "dijkstra.h"
+#include "serialport.h"
+
+struct Point {
+    long long lat, lon;
+};
+
+// returns the manhattan distance between two points
+long long manhattan(const Point& pt1, const Point& pt2) {
+  long long dLat = pt1.lat - pt2.lat, dLon = pt1.lon - pt2.lon;
+  return abs(dLat) + abs(dLon);
+}
+
+// finds the id of the point that is closest to the given point "pt"
+int findClosest(const Point& pt, const unordered_map<int, Point>& points) {
+  pair<int, Point> best = *points.begin();
+
+  for (const auto& check : points) {
+    if (manhattan(pt, check.second) < manhattan(pt, best.second)) {
+      best = check;
+    }
+  }
+  return best.first;
+}
+
+
+// read the graph from the file that has the same format as the "Edmonton graph" file
+void readGraph(const string& filename, WDigraph& g, unordered_map<int, Point>& points) {
+  ifstream fin(filename);
+  string line;
+
+  while (getline(fin, line)) {
+    // split the string around the commas, there will be 4 substrings either way
+    string p[4];
+    int at = 0;
+    for (auto c : line) {
+      if (c == ',') {
+        // start new string
+        ++at;
+      }
+      else {
+        // append character to the string we are building
+        p[at] += c;
+      }
+    }
+
+    if (at != 3) {
+      // empty line
+      break;
+    }
+
+    if (p[0] == "V") {
+      // new Point
+      int id = stoi(p[1]);
+      assert(id == stoll(p[1])); // sanity check: asserts if some id is not 32-bit
+      points[id].lat = static_cast<long long>(stod(p[2])*100000);
+      points[id].lon = static_cast<long long>(stod(p[3])*100000);
+      g.addVertex(id);
+    }
+    else {
+      // new directed edge
+      int u = stoi(p[1]), v = stoi(p[2]);
+      g.addEdge(u, v, manhattan(points[u], points[v]));
+    }
+  }
+}
+
+// keep in mind that in part 1, the program should only handle 1 request
+// in part 2, you need to listen for a new request the moment you are done
+// handling one request
+int main() {
+  WDigraph graph;
+  unordered_map<int, Point> points;
+
+  // build the graph
+  readGraph("edmonton-roads-2.0.1.txt", graph, points);
+
+  //Misc initializations: bool var for ending loop, serial port, string for line read, and initialize path.
+  SerialPort Serial("/dev/ttyACM0");
+  string tokens[5];
+  Point start, end;
+  stack<int> path;
+ 
+  //States for communication 
+  string state = "waiting";
+
+  //Going into communcaition phase
+  while (true) {
+    //Waiting state
+    if (state == "waiting") {
+      //Tokenizing the line read.
+      istringstream f(Serial.readline(1000));
+      string s; 
+      string tokens[5];
+      int i = 0;
+
+      //Inserting tokens into array for later
+      while(getline(f, s, ' ')) {
+        tokens[i] = s;
+        i++;
+      } 
+
+      //Reading tokens into the start/end lat and lon;
+      if (tokens[0] == "R") {
+        cout << "Recieved: " << tokens[0] << " " << tokens [1] << " " << tokens [2] << " " << tokens [3] << " " << tokens [4]; 
+        start.lat = stoll(tokens[1]);
+        start.lon = stoll(tokens[2]);
+        end.lat = stoll(tokens[3]);
+        end.lon = stoll(tokens[4]);
+
+
+        state = "processing";
+      }
+    }
+    else if (state == "processing") {
+      // get the points closest to the two points we read
+      int closest_start = findClosest(start, points), closest_end = findClosest(end, points);
+
+      // run dijkstra's, this is the unoptimized version that does not stop
+      // when the end is reached but it is still fast enough
+      unordered_map<int, PIL> tree;
+      dijkstra(graph, closest_start, tree);
+
+      // no path
+      if (tree.find(closest_end) == tree.end()) {
+          Serial.writeline("N ");
+          Serial.writeline("0");
+          Serial.writeline("\n");
+          cout << "Sending: N 0" << endl;
+      }
+      else {
+        // read off the path by stepping back through the search tree
+        while (closest_end != closest_start) {
+          path.push(closest_end);
+          closest_end = tree[closest_end].first;
+        }
+        path.push(closest_start);
+      }
+
+      state = "printing";
+    }
+    else if (state == "printing") {
+      //Write the path.size (number of vertices in  path stack)
+      Serial.writeline("N ");
+      Serial.writeline(to_string(path.size()));
+      Serial.writeline("\n");
+      cout << "Sending: N " << path.size() << endl;
+
+      //Send off all the waypoints to the client when given the ack: A
+      while (!path.empty()) {
+        string ack = Serial.readline(1000);
+        if(ack[0] == 'A') {
+          cout << "Recieved: A" << endl;
+          int v = path.top();
+    		  Serial.writeline("W ");
+    		  Serial.writeline(to_string(points[v].lat));
+    		  Serial.writeline(" ");
+    		  Serial.writeline(to_string(points[v].lon));
+    		  Serial.writeline("\n");
+    		  cout << "Sending: W " << to_string(points[v].lat) << " " << to_string(points[v].lon) << endl;
+          path.pop();
+        }
+      }
+      state = "ending";
+    }
+    else if (state == "ending") {
+      //Print E for end and change to the final end state.
+      Serial.writeline("E\n");
+      cout << "Sending: E" << endl;
+      state = "waiting";
+    }
+
+  }
+
+  return 0;
+}
