@@ -1,9 +1,3 @@
-CMPUT 275 Wi2020
-Assignment 2 Part 2
-Scott CHU ID: 1570527
-Simon CHEN ID: 1574384
-*------------------------------------------------------------------------------------------------*
-
 Included Files:
 /client:
 - client.cpp
